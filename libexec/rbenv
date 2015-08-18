@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
+
+# 脚本中遇到返回值不为 0 的命令后就退出
 set -e
+# 移除 CDPATH 的 export 属性
 export -n CDPATH
 
+# 根据第一个参数是否为 --debug 来确定是否设置 DEBUG 变量
 if [ "$1" = "--debug" ]; then
   export RBENV_DEBUG=1
+
+  # 参数左移一位，即 $2 变为 $1
   shift
 fi
 
 if [ -n "$RBENV_DEBUG" ]; then
+  # 设置 PS4，当设置 set -x 后，脚本执行并按行打印时，显示 BASH_SOURCE 和 LINENO
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
+  # 设置脚本在执行是按行打印
   set -x
 fi
 
+# ${0%/*} 通过脚本路径 $0 获取当前脚本所在的文件夹
+# 从 rbenv-realpath.dylib 中载入 builtin realpath
 if enable -f "${0%/*}"/../libexec/rbenv-realpath.dylib realpath 2>/dev/null; then
   abs_dirname() {
     local path="$(realpath "$1")"
@@ -22,31 +32,38 @@ else
     echo "rbenv: failed to load \`realpath' builtin" >&2
     exit 1
   fi
-READLINK=$(type -p greadlink readlink | head -1)
-if [ -z "$READLINK" ]; then
-  echo "rbenv: cannot find readlink - are you missing GNU coreutils?" >&2
-  exit 1
+
+  # 返回第一个有效的 readlink
+  READLINK=$(type -p greadlink readlink | head -1)
+  if [ -z "$READLINK" ]; then
+    echo "rbenv: cannot find readlink - are you missing GNU coreutils?" >&2
+    exit 1
+  fi
+
+  resolve_link() {
+    $READLINK "$1"
+  }
+
+  abs_dirname() {
+    # 局部变量
+    local cwd="$(pwd)"
+    local path="$1"
+
+    while [ -n "$path" ]; do
+      # 非贪婪移除字符串尾部 /* 匹配的字符串
+      cd "${path%/*}"
+      # 贪婪移除字符串首部 */ 匹配字符串
+      local name="${path##*/}"
+      # 确保返回值不为 0，防止中断脚本执行
+      path="$(resolve_link "$name" || true)"
+    done
+
+    pwd
+    cd "$cwd"
+  }
 fi
 
-resolve_link() {
-  $READLINK "$1"
-}
-
-abs_dirname() {
-  local cwd="$(pwd)"
-  local path="$1"
-
-  while [ -n "$path" ]; do
-    cd "${path%/*}"
-    local name="${path##*/}"
-    path="$(resolve_link "$name" || true)"
-  done
-
-  pwd
-  cd "$cwd"
-}
-fi
-
+# 设置 RBENV_ROOT
 if [ -z "${RBENV_ROOT}" ]; then
   RBENV_ROOT="${HOME}/.rbenv"
 else
@@ -54,6 +71,7 @@ else
 fi
 export RBENV_ROOT
 
+# 设置 RBENV_DIR
 if [ -z "${RBENV_DIR}" ]; then
   RBENV_DIR="$(pwd)"
 else
@@ -66,9 +84,12 @@ else
 fi
 export RBENV_DIR
 
-
+# 开启 nullglob 选项
+# http://www.gnu.org/software/bash/manual/html_node/The-Shopt-Builtin.html
 shopt -s nullglob
 
+# 获取当前脚本的绝对路径，也就是 ../libexec
+# 修改 PATH
 bin_path="$(abs_dirname "$0")"
 for plugin_bin in "${RBENV_ROOT}/plugins/"*/bin; do
   PATH="${plugin_bin}:${PATH}"
@@ -80,31 +101,37 @@ if [ "${bin_path%/*}" != "$RBENV_ROOT" ]; then
   # Add rbenv's own `rbenv.d` unless rbenv was cloned to RBENV_ROOT
   RBENV_HOOK_PATH="${RBENV_HOOK_PATH}:${bin_path%/*}/rbenv.d"
 fi
+
 RBENV_HOOK_PATH="${RBENV_HOOK_PATH}:/usr/local/etc/rbenv.d:/etc/rbenv.d:/usr/lib/rbenv/hooks"
 for plugin_hook in "${RBENV_ROOT}/plugins/"*/etc/rbenv.d; do
   RBENV_HOOK_PATH="${RBENV_HOOK_PATH}:${plugin_hook}"
 done
 export RBENV_HOOK_PATH
 
+# 关闭 nullglob 选项
 shopt -u nullglob
 
 
 command="$1"
 case "$command" in
 "" | "-h" | "--help" )
+  # echo 时支持 \ 转义
   echo -e "$(rbenv---version)\n$(rbenv-help)" >&2
   ;;
 "-v" )
   exec rbenv---version
   ;;
 * )
+  # command
   command_path="$(command -v "rbenv-$command" || true)"
   if [ -z "$command_path" ]; then
     echo "rbenv: no such command \`$command'" >&2
     exit 1
   fi
 
+  # 参数左移一位
   shift 1
+  # 使用剩余参数执行命令
   exec "$command_path" "$@"
   ;;
 esac
